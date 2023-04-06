@@ -1,0 +1,52 @@
+name: Build and Publish Docker Image
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: sitios-381213
+  IMAGE_NAME: app-next-13
+  IMAGE_TAG:  ${{ github.sha }}
+  CLUSTER_NAME: sitios-cluster
+  CLUSTER_REGION: us-east4
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v2
+
+    - name: Configure gcloud auth
+      uses: 'google-github-actions/auth@main'
+      with:
+        credentials_json: '${{ secrets.GCLOUD_SA_KEY }}'
+    
+    - name: 'Set up Cloud SDK'
+      uses: 'google-github-actions/setup-gcloud@main'
+    
+    - name: Build Docker image
+      run: |
+        docker build -t gcr.io/$PROJECT_ID/$IMAGE_NAME:$IMAGE_TAG .
+        docker tag gcr.io/$PROJECT_ID/$IMAGE_NAME:$IMAGE_TAG gcr.io/$PROJECT_ID/$IMAGE_NAME:latest
+
+    - name: Publish Docker image to Google Container Registry
+      run: |
+        gcloud auth configure-docker
+        docker push gcr.io/$PROJECT_ID/$IMAGE_NAME:$IMAGE_TAG
+        docker push gcr.io/$PROJECT_ID/$IMAGE_NAME:latest
+
+    - name: Configure Kubectl
+      run: |
+        gcloud container clusters get-credentials ${{ env.CLUSTER_NAME }} --region ${{ env.CLUSTER_REGION }} --project ${{ env.PROJECT_ID }}
+        kubectl config use-context gke_${{ env.PROJECT_ID }}_${{ env.CLUSTER_REGION }}_${{ env.CLUSTER_NAME }}
+        export USE_GKE_GCLOUD_AUTH_PLUGIN=True
+        gcloud components install gke-gcloud-auth-plugin
+        
+    - name: Apply Kubernetes Deployment
+      run: |
+        kubectl set image deployment/${{ env.IMAGE_NAME }} ${{ env.IMAGE_NAME }}=gcr.io/${{ env.PROJECT_ID }}/${{ env.IMAGE_NAME }}:${{ env.IMAGE_TAG }}
+        kubectl apply -f kubernetes.yaml
+        kubectl rollout restart deployment/${{ env.IMAGE_NAME }}
